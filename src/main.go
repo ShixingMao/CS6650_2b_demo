@@ -1,67 +1,109 @@
 package main
 
 import (
-    "net/http"
+	"net/http"
+	"strconv"
+	"sync"
 
-    "github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin"
 )
 
-// album represents data about a record album.
-type album struct {
-    ID     string  `json:"id"`
-    Title  string  `json:"title"`
-    Artist string  `json:"artist"`
-    Price  float64 `json:"price"`
+// Product struct matching the OpenAPI schema
+type Product struct {
+	ProductID    int    `json:"product_id"`
+	SKU          string `json:"sku"`
+	Manufacturer string `json:"manufacturer"`
+	CategoryID   int    `json:"category_id"`
+	Weight       int    `json:"weight"`
+	SomeOtherID  int    `json:"some_other_id"`
 }
 
-// albums slice to seed record album data.
-var albums = []album{
-    {ID: "1", Title: "Blue Train", Artist: "John Coltrane", Price: 56.99},
-    {ID: "2", Title: "Jeru", Artist: "Gerry Mulligan", Price: 17.99},
-    {ID: "3", Title: "Sarah Vaughan and Clifford Brown", Artist: "Sarah Vaughan", Price: 39.99},
-}
+// Thread-safe in-memory store
+var (
+	productStore = make(map[int]Product)
+	storeLock    sync.RWMutex
+)
 
 func main() {
-    router := gin.Default()
-    router.GET("/albums", getAlbums)
-    router.GET("/albums/:id", getAlbumByID)
-    router.POST("/albums", postAlbums)
+	router := gin.Default()
+	storeLock.Lock()
+	productStore[1] = Product{ProductID: 1, SKU: "ABC-001", Manufacturer: "Acme", CategoryID: 10, Weight: 500, SomeOtherID: 999}
+	productStore[2] = Product{ProductID: 2, SKU: "DEF-002", Manufacturer: "Globex", CategoryID: 12, Weight: 250, SomeOtherID: 1001}
+	productStore[3] = Product{ProductID: 3, SKU: "GHI-003", Manufacturer: "Initech", CategoryID: 15, Weight: 300, SomeOtherID: 1002}
+	productStore[4] = Product{ProductID: 4, SKU: "JKL-004", Manufacturer: "Umbrella", CategoryID: 18, Weight: 1500, SomeOtherID: 1003}
+	productStore[5] = Product{ProductID: 5, SKU: "MNO-005", Manufacturer: "Wayne", CategoryID: 20, Weight: 750, SomeOtherID: 1004}
+	storeLock.Unlock()
 
-    router.Run(":8080")
+	// POST /products/:productId/details
+	router.POST("/products/:productId/details", addProductDetails)
+
+	// GET /products/:productId
+	router.GET("/products/:productId", getProduct)
+
+	router.Run(":8080")
 }
 
-// getAlbums responds with the list of all albums as JSON.
-func getAlbums(c *gin.Context) {
-    c.IndentedJSON(http.StatusOK, albums)
+// POST handler: Add or update product details
+func addProductDetails(c *gin.Context) {
+	productIdStr := c.Param("productId")
+	productId, err := strconv.Atoi(productIdStr)
+	if err != nil || productId < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_INPUT",
+			"message": "Product ID must be a positive integer",
+		})
+		return
+	}
+
+	var product Product
+	if err := c.ShouldBindJSON(&product); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_INPUT",
+			"message": "Invalid JSON body",
+		})
+		return
+	}
+
+	// Validate required fields
+	if product.SKU == "" || product.Manufacturer == "" || product.CategoryID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_INPUT",
+			"message": "Missing required fields",
+		})
+		return
+	}
+
+	// Store or update the product
+	storeLock.Lock()
+	productStore[productId] = product
+	storeLock.Unlock()
+
+	c.Status(http.StatusNoContent)
 }
 
-// postAlbums adds an album from JSON received in the request body.
-func postAlbums(c *gin.Context) {
-    var newAlbum album
+// GET handler: Retrieve product by ID
+func getProduct(c *gin.Context) {
+	productIdStr := c.Param("productId")
+	productId, err := strconv.Atoi(productIdStr)
+	if err != nil || productId < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_INPUT",
+			"message": "Product ID must be a positive integer",
+		})
+		return
+	}
 
-    // Call BindJSON to bind the received JSON to
-    // newAlbum.
-    if err := c.BindJSON(&newAlbum); err != nil {
-        return
-    }
+	storeLock.RLock()
+	product, exists := productStore[productId]
+	storeLock.RUnlock()
 
-    // Add the new album to the slice.
-    albums = append(albums, newAlbum)
-    c.IndentedJSON(http.StatusCreated, newAlbum)
-}
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error":   "NOT_FOUND",
+			"message": "Product not found",
+		})
+		return
+	}
 
-// getAlbumByID locates the album whose ID value matches the id
-// parameter sent by the client, then returns that album as a response.
-func getAlbumByID(c *gin.Context) {
-    id := c.Param("id")
-
-    // Loop through the list of albums, looking for
-    // an album whose ID value matches the parameter.
-    for _, a := range albums {
-        if a.ID == id {
-            c.IndentedJSON(http.StatusOK, a)
-            return
-        }
-    }
-    c.IndentedJSON(http.StatusNotFound, gin.H{"message": "album not found"})
+	c.JSON(http.StatusOK, product)
 }
