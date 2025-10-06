@@ -1,53 +1,28 @@
-## Instructions
+# Product API (Online Store)
 
-### Prepare Credentials
+### Run locally
+```bash
+go run main.go
 
-Retrieve you temporary credentials from Learner's Lab.
-Enter your configuration when prompted:
 ```
-aws configure
+### Test locally with curl commands
+```post
+curl -X POST http://localhost:8080/products/1/details \
+-H "Content-Type: application/json" \
+-d '{"product_id":1,"sku":"SKU123","manufacturer":"Acme","category_id":2,"weight":100,"some_other_id":3}'
 ```
-
-And set your session token:
+```get
+curl http://localhost:8080/products/1
 ```
-aws configure set aws_session_token <YOUR-TEMP-SESSION-TOKEBN>
-```
-
-### Apply Infrastructure
+### Deploy
 ```
 cd terraform
 terraform init
-terraform apply -auto-approve
+terraform apply
 ```
-
-### Send Requests
-Make sure you are in terraform folder
-
-Get public ip address
+### Code structure
 ```
-aws ec2 describe-network-interfaces \
---network-interface-ids $(
-    aws ecs describe-tasks \
-    --cluster $(terraform output -raw ecs_cluster_name) \
-    --tasks $(
-        aws ecs list-tasks \
-        --cluster $(terraform output -raw ecs_cluster_name) \
-        --service-name $(terraform output -raw ecs_service_name) \
-        --query 'taskArns[0]' --output text
-    ) \
-    --query "tasks[0].attachments[0].details[?name=='networkInterfaceId'].value" \
-    --output text
-) \
---query 'NetworkInterfaces[0].Association.PublicIp' \
---output text
-```
-
-Send some requests:
-```
-curl http://<PUBLIC-IP-ADDRESS>:8080/albums
-```
-
-## Clean Up
-```
-terraform destroy -auto-approve
+Go local server and Dockerfile: src/
+Infra: terraform/
+Load tests: locust/
 ```
