@@ -11,6 +11,14 @@ module "ecr" {
   repository_name = var.ecr_repository_name
 }
 
+module "alb" {
+  source             = "./modules/alb"
+  service_name       = var.service_name
+  vpc_id             = module.network.vpc_id
+  subnet_ids         = module.network.subnet_ids
+  security_group_ids = [module.network.alb_sg_id]
+}
+
 module "logging" {
   source            = "./modules/logging"
   service_name      = var.service_name
@@ -34,6 +42,8 @@ module "ecs" {
   log_group_name     = module.logging.log_group_name
   ecs_count          = var.ecs_count
   region             = var.aws_region
+  target_group_arn   = module.alb.target_group_arn
+
 }
 
 

@@ -1,91 +1,79 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-// Product struct matching the OpenAPI schema
+// Product structure — matches spec requirements
 type Product struct {
-	ProductID    int    `json:"product_id"`
-	SKU          string `json:"sku"`
-	Manufacturer string `json:"manufacturer"`
-	CategoryID   int    `json:"category_id"`
-	Weight       int    `json:"weight"`
-	SomeOtherID  int    `json:"some_other_id"`
+	ID          int    `json:"id"`
+	Name        string `json:"name"`     // searchable
+	Category    string `json:"category"` // searchable
+	Description string `json:"description"`
+	Brand       string `json:"brand"`
 }
 
-// Thread-safe in-memory store
+// Thread-safe in-memory store using sync.Map
 var (
-	productStore = make(map[int]Product)
-	storeLock    sync.RWMutex
+	productStore  sync.Map
+	totalProducts = 100000
+	productIDs    []int // fixed list of all IDs to allow deterministic iteration
 )
+
+// GenerateProducts creates 100,000 products with rotating categories and brands
+func generateProducts() {
+	brands := []string{"Alpha", "Beta", "Gamma", "Delta", "Omega", "Nova", "Apex", "Orion", "Epsilon", "Zeta"}
+	categories := []string{"Electronics", "Books", "Home", "Toys", "Sports", "Clothing", "Beauty", "Garden", "Office", "Grocery"}
+
+	for i := 1; i <= totalProducts; i++ {
+		brand := brands[i%len(brands)]
+		category := categories[i%len(categories)]
+		name := fmt.Sprintf("Product %s %d", brand, i)
+
+		p := Product{
+			ID:          i,
+			Name:        name,
+			Category:    category,
+			Description: "A reliable product for everyday use.",
+			Brand:       brand,
+		}
+
+		productStore.Store(i, p)
+		productIDs = append(productIDs, i)
+	}
+
+	fmt.Printf("✅ Generated %d products successfully.\n", totalProducts)
+}
 
 func main() {
 	router := gin.Default()
-	storeLock.Lock()
-	productStore[1] = Product{ProductID: 1, SKU: "ABC-001", Manufacturer: "Acme", CategoryID: 10, Weight: 500, SomeOtherID: 999}
-	productStore[2] = Product{ProductID: 2, SKU: "DEF-002", Manufacturer: "Globex", CategoryID: 12, Weight: 250, SomeOtherID: 1001}
-	productStore[3] = Product{ProductID: 3, SKU: "GHI-003", Manufacturer: "Initech", CategoryID: 15, Weight: 300, SomeOtherID: 1002}
-	productStore[4] = Product{ProductID: 4, SKU: "JKL-004", Manufacturer: "Umbrella", CategoryID: 18, Weight: 1500, SomeOtherID: 1003}
-	productStore[5] = Product{ProductID: 5, SKU: "MNO-005", Manufacturer: "Wayne", CategoryID: 20, Weight: 750, SomeOtherID: 1004}
-	storeLock.Unlock()
+	router.GET("/health", func(c *gin.Context) {
+		c.String(200, "ok")
+	})
+	// Generate 100k products at startup
+	generateProducts()
 
-	// POST /products/:productId/details
-	router.POST("/products/:productId/details", addProductDetails)
+	// Routes
+	router.GET("/products/:id", getProduct)
+	router.GET("/products", getSampleProducts) // quick test
+	router.GET("/products/search", searchProducts)
 
-	// GET /products/:productId
-	router.GET("/products/:productId", getProduct)
-
-	router.Run(":8080")
+	// Run the server
+	router.Run("0.0.0.0:8080")
 }
 
-// POST handler: Add or update product details
-func addProductDetails(c *gin.Context) {
-	productIdStr := c.Param("productId")
-	productId, err := strconv.Atoi(productIdStr)
-	if err != nil || productId < 1 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "INVALID_INPUT",
-			"message": "Product ID must be a positive integer",
-		})
-		return
-	}
-
-	var product Product
-	if err := c.ShouldBindJSON(&product); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "INVALID_INPUT",
-			"message": "Invalid JSON body",
-		})
-		return
-	}
-
-	// Validate required fields
-	if product.SKU == "" || product.Manufacturer == "" || product.CategoryID <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "INVALID_INPUT",
-			"message": "Missing required fields",
-		})
-		return
-	}
-
-	// Store or update the product
-	storeLock.Lock()
-	productStore[productId] = product
-	storeLock.Unlock()
-
-	c.Status(http.StatusNoContent)
-}
-
-// GET handler: Retrieve product by ID
+// GET /products/:id — retrieve product by ID
 func getProduct(c *gin.Context) {
-	productIdStr := c.Param("productId")
-	productId, err := strconv.Atoi(productIdStr)
-	if err != nil || productId < 1 {
+	idParam := c.Param("id")
+	id, err := strconv.Atoi(idParam)
+	if err != nil || id < 1 {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "INVALID_INPUT",
 			"message": "Product ID must be a positive integer",
@@ -93,11 +81,8 @@ func getProduct(c *gin.Context) {
 		return
 	}
 
-	storeLock.RLock()
-	product, exists := productStore[productId]
-	storeLock.RUnlock()
-
-	if !exists {
+	v, ok := productStore.Load(id)
+	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error":   "NOT_FOUND",
 			"message": "Product not found",
@@ -105,5 +90,79 @@ func getProduct(c *gin.Context) {
 		return
 	}
 
+	product := v.(Product)
 	c.JSON(http.StatusOK, product)
+}
+
+// GET /products — quick check endpoint to view first few products
+func getSampleProducts(c *gin.Context) {
+	products := []Product{}
+	count := 0
+
+	productStore.Range(func(key, value interface{}) bool {
+		if count >= 5 {
+			return false
+		}
+		p := value.(Product)
+		products = append(products, p)
+		count++
+		return true
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"total_generated": totalProducts,
+		"sample_products": products,
+	})
+}
+
+// GET /products/search?q={query}
+// Each search checks exactly 100 products, counts every check, returns up to 20 matches
+func searchProducts(c *gin.Context) {
+	query := strings.TrimSpace(strings.ToLower(c.Query("q")))
+	const checkLimit = 100
+	const maxResults = 20
+
+	// Validate that query param exists (you can relax this if "" is valid)
+	if query == "" {
+		// Allow empty searches if you want — comment/uncomment as needed:
+		// c.JSON(http.StatusBadRequest, gin.H{"error": "MISSING_QUERY", "message": "Missing ?q parameter"})
+		// return
+	}
+
+	start := time.Now()
+	results := []Product{}
+	totalFound := 0
+	checked := 0
+
+	// pick a stable start index (avoid out-of-range)
+	startIndex := int(time.Now().UnixNano() % int64(totalProducts))
+
+	for i := 0; i < checkLimit; i++ {
+		index := (startIndex + i) % totalProducts
+		id := productIDs[index]
+
+		v, ok := productStore.Load(id)
+		if !ok {
+			continue
+		}
+		checked++
+
+		p := v.(Product)
+		if query == "" ||
+			strings.Contains(strings.ToLower(p.Name), query) ||
+			strings.Contains(strings.ToLower(p.Category), query) {
+			totalFound++
+			if len(results) < maxResults {
+				results = append(results, p)
+			}
+		}
+	}
+
+	elapsed := time.Since(start)
+
+	c.JSON(http.StatusOK, gin.H{
+		"products":    results,
+		"total_found": totalFound,
+		"search_time": elapsed.String(),
+	})
 }
